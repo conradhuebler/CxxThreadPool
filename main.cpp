@@ -21,7 +21,7 @@
  *
  */
 
-// #define _CxxThreadPoolVerbose
+// #define _CxxThreadPool_Verbose
 
 #include "include/CxxThreadPool.h"
 #include "include/Timer.h"

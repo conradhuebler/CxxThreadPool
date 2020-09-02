@@ -30,7 +30,15 @@
 #include <thread>
 #include <vector>
 
+#if defined(_OPENMP)
 #include <omp.h>
+#endif
+
+#ifndef _CxxThreadPool_TimeOut
+static int wake_up = 100;
+#else
+static int wake_up = _CxxThreadPool_TimeOut;
+#endif
 
 class CxxThread {
 public:
@@ -39,9 +47,15 @@ public:
 
     inline void start()
     {
+#ifdef _CxxThreadPool_Verbose
+        std::cout << "CxxThread::start() - Thread is up and running." << std::endl;
+#endif
         m_return = execute();
         m_running = false;
         m_finished = true;
+#ifdef _CxxThreadPool_Verbose
+        std::cout << "CxxThread::start() - Thread finished." << std::endl;
+#endif
     }
 
     inline bool Running()
@@ -79,9 +93,26 @@ class CxxThreadPool
 public:
     CxxThreadPool()
     {
+#ifdef _CxxThreadPool_Verbose
+        std::cout << "CxxThreadPool::CxxThreadPool() - Setting up thread pool for usage" << std::endl;
+        std::cout << "CxxThreadPool::CxxThreadPool() - Wake up every " << wake_up << " msecs." << std::endl;
+#endif
+
         /* Set active threads to OMP NUM Threads and set OMP NUM Threads to 1 */
 #if defined(_OPENMP)
-        m_omp_env_thread = std::max(atoi(std::getenv("OMP_NUM_THREADS")), 1);
+
+#ifdef _CxxThreadPool_Verbose
+        std::cout << "CxxThreadPool::CxxThreadPool() - openMP is enabled, getting OMP_NUM_THREADS" << std::endl;
+#endif
+        const char* val = std::getenv("OMP_NUM_THREADS");
+        if (val == nullptr) { // invalid to assign nullptr to std::string
+            m_omp_env_thread = 1;
+        } else {
+            m_omp_env_thread = std::max(atoi(std::getenv("OMP_NUM_THREADS")), 1);
+        }
+#ifdef _CxxThreadPool_Verbose
+        std::cout << "CxxThreadPool::CxxThreadPool() - OMP_NUM_THREADS was " << m_omp_env_thread << std::endl;
+#endif
         omp_set_num_threads(1);
 #endif
         setActiveThreadCount(m_omp_env_thread);
@@ -125,15 +156,15 @@ public:
     /*! \brief Start threads and wait until all finished */
     inline void StartAndWait()
     {
-        while(m_pool.size() || m_active.size())
-        {
-            if(m_pool.size())
-            {
+        bool start_next = true;
+        while ((m_pool.size() || m_active.size())) {
+            if (m_pool.size() > 0) {
                 while(m_active.size() < m_max_thread_count)
                 {
-                   StartNext();
-#ifdef _VERBOSE
-                   printf(("Running %d, Waiting %d, Finished %d\n"), m_active.size(), m_pool.size(), m_finished.size());
+                    if (!StartNext())
+                        break;
+#ifdef _CxxThreadPool_Verbose
+                    printf(("CxxThreadPool::StartAndWait() - Running %d, Waiting %d, Finished %d\n"), m_active.size(), m_pool.size(), m_finished.size());
 #endif
                 }
             }
@@ -148,6 +179,7 @@ public:
                     continue;
                 }
             }
+            std::this_thread::sleep_for(std::chrono::milliseconds(wake_up));
         }
     }
 
@@ -158,11 +190,13 @@ private:
     inline bool StartNext()
     {
         auto thread = m_pool.front();
+        if (thread == NULL)
+            return false;
         std::thread th = std::thread(&CxxThread::start, thread);
         th.detach();
         m_active.push_back(thread);
         m_pool.pop();
-        return true;
+        return m_pool.size();
     }
 
     int m_max_thread_count = 1;
