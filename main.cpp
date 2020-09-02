@@ -22,6 +22,9 @@
  */
 
 // #define _CxxThreadPool_Verbose
+// #define _CxxThreadPool_NoBar
+
+#define _CxxThreadPool_BarWidth 100
 
 #include "include/CxxThreadPool.h"
 #include "include/Timer.h"

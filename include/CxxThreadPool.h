@@ -40,6 +40,12 @@ static int wake_up = 100;
 static int wake_up = _CxxThreadPool_TimeOut;
 #endif
 
+#ifndef _CxxThreadPool_BarWidth
+static int bar_width = 100;
+#else
+static int bar_width = _CxxThreadPool_BarWidth;
+#endif
+
 class CxxThread {
 public:
     CxxThread() = default;
@@ -48,13 +54,15 @@ public:
     inline void start()
     {
 #ifdef _CxxThreadPool_Verbose
-        std::cout << "CxxThread::start() - Thread is up and running." << std::endl;
+        std::cout << "CxxThread::start() - Thread " << m_increment_id << " is up and running." << std::endl;
 #endif
+        m_start = std::chrono::system_clock::now();
         m_return = execute();
         m_running = false;
         m_finished = true;
+        m_end = std::chrono::system_clock::now();
 #ifdef _CxxThreadPool_Verbose
-        std::cout << "CxxThread::start() - Thread finished." << std::endl;
+        std::cout << "CxxThread::start() - Thread  " << m_increment_id << " finished after " << std::chrono::duration_cast<std::chrono::milliseconds>(m_end - m_start).count() << " mseconds." << std::endl;
 #endif
     }
 
@@ -79,10 +87,14 @@ public:
     inline bool AutoDelete() const { return m_auto_delete; }
 
     inline std::thread *Thread() { return &m_thread; }
+    inline void setIncrementId(int id) { m_increment_id = id; }
+
 private:
     bool m_running = true, m_finished = false;
     bool m_auto_delete = true;
     int m_return = 0;
+    std::chrono::time_point<std::chrono::system_clock> m_start, m_end;
+    int m_increment_id = 0;
 
 protected:
     std::thread m_thread;
@@ -156,6 +168,7 @@ public:
     /*! \brief Start threads and wait until all finished */
     inline void StartAndWait()
     {
+        m_max = m_pool.size();
         bool start_next = true;
         while ((m_pool.size() || m_active.size())) {
             if (m_pool.size() > 0) {
@@ -163,9 +176,7 @@ public:
                 {
                     if (!StartNext())
                         break;
-#ifdef _CxxThreadPool_Verbose
-                    printf(("CxxThreadPool::StartAndWait() - Running %d, Waiting %d, Finished %d\n"), m_active.size(), m_pool.size(), m_finished.size());
-#endif
+                    Status();
                 }
             }
             for(int i = 0; i < m_active.size(); ++i)
@@ -176,6 +187,7 @@ public:
                 {
                     m_finished.push_back(m_active[i]);
                     m_active.erase(m_active.begin() + i);
+                    Status();
                     continue;
                 }
             }
@@ -192,6 +204,8 @@ private:
         auto thread = m_pool.front();
         if (thread == NULL)
             return false;
+        thread->setIncrementId(m_increment_id);
+        m_increment_id++;
         std::thread th = std::thread(&CxxThread::start, thread);
         th.detach();
         m_active.push_back(thread);
@@ -199,8 +213,45 @@ private:
         return m_pool.size();
     }
 
+    inline void Status() const
+    {
+#ifdef _CxxThreadPool_Verbose
+        printf(("\n\nCxxThreadPool::Status() - Running %d, Waiting %d, Finished %d\n\n"), m_active.size(), m_pool.size(), m_finished.size());
+#endif
+
+#ifndef _CxxThreadPool_Verbose
+        Progress();
+#endif
+    }
+
+    inline void Progress() const
+    {
+#ifndef _CxxThreadPool_NoBar
+        int finished = m_finished.size();
+        int active = m_active.size();
+        int cum_active = finished + m_active.size();
+        double p_finished = finished / m_max;
+        double p_active = cum_active / m_max;
+        std::cerr << "[";
+        int bar_finished = bar_width * p_finished;
+        int bar_active = bar_width * p_active;
+        for (int i = 0; i < bar_width; ++i) {
+            if (i < bar_finished)
+                std::cerr << "=";
+            else if (i < bar_active && i > bar_finished)
+                std::cerr << "-";
+            else if (i > bar_active && i > bar_finished)
+                std::cerr << " ";
+        }
+        std::cerr << "] " << int(p_finished * 100.0) << " % finished jobs |" << int(active / m_max * 100.0) << " % active jobs |" << int(active / double(m_max_thread_count) * 100.0) << " % load \r";
+        std::cerr.flush();
+#endif
+    }
+
     int m_max_thread_count = 1;
     int m_omp_env_thread = 1;
+    int m_increment_id = 0;
+    double m_max = 0;
     std::queue<CxxThread *>m_pool;
     std::vector<CxxThread *> m_active, m_finished;
     bool m_allow_start = true;

@@ -1,6 +1,6 @@
 # CxxThreadPool
 
-Simple, header-only Thread Pool Class for C++11 ( or newer ). Inspired by the Qt ThreadPool Class.
+Simple, header-only Thread Pool Class for C++11 ( or newer ). Inspired by the Qt ThreadPool Class. A progress bar will be printed out to cerr.
 
 # Usage
 
@@ -39,7 +39,19 @@ pool->StartAndWait();
 
 Increase verbosity by defining
 ```cpp
-#define _CxxThreadPoolVerbose
+#define _CxxThreadPool_Verbose
+```
+Prevent of a progress bar appearing
+```cpp
+#define _CxxThreadPool_NoBar
+```
+Define width of the progress bar
+```cpp
+#define _CxxThreadPool_BarWidth
+```
+Wakeup timeout for to check threads in milliseconds ( default = 100 )
+```cpp
+#define _CxxThreadPool_TimeOut 100
 ```
 before including the header file.
 
