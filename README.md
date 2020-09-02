@@ -32,4 +32,15 @@ pool->addThread(thread);
 ```
 .
 
+Finally, run all threads in queued and in parallel with
+```cpp
+pool->StartAndWait();
+```
+
+Increase verbosity by defining
+```cpp
+#define _CxxThreadPoolVerbose
+```
+before including the header file.
+
 Have a lot of fun.

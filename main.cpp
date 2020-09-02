@@ -21,6 +21,7 @@
  *
  */
 
+// #define _CxxThreadPoolVerbose
 
 #include "include/CxxThreadPool.h"
 #include "include/Timer.h"
@@ -62,6 +63,6 @@ int main()
         Thread *thread = new Thread(rand_r(&seed)/1e6);
         pool->addThread(thread);
     }
-    pool->start();
+    pool->StartAndWait();
     return 0;
 }

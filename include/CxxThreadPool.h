@@ -30,6 +30,8 @@
 #include <thread>
 #include <vector>
 
+#include <omp.h>
+
 class CxxThread {
 public:
     CxxThread() = default;
@@ -54,10 +56,11 @@ public:
 
     virtual int execute() = 0;
 
-    inline void wait()
-    {
-        m_thread.join();
-    }
+    //inline void wait()
+    //{
+    //    m_thread.join();
+    //}
+
     inline std::thread::id Id() const { return m_thread.get_id(); }
     inline bool AutoDelete() const { return m_auto_delete; }
 
@@ -74,7 +77,19 @@ protected:
 class CxxThreadPool
 {
 public:
-    CxxThreadPool() = default;
+    CxxThreadPool()
+    {
+        /* Set active threads to OMP NUM Threads and set OMP NUM Threads to 1 */
+#if defined(_OPENMP)
+        m_omp_env_thread = std::max(atoi(std::getenv("OMP_NUM_THREADS")), 1);
+        omp_set_num_threads(1);
+#endif
+        setActiveThreadCount(m_omp_env_thread);
+    }
+
+    /*! \brief Clean up all threads
+     * TODO - consistent pointer handling - autodelete vs manual deletion
+     */
     virtual ~CxxThreadPool()
     {
        while(m_pool.size())
@@ -92,26 +107,23 @@ public:
             if(m_finished[i]->AutoDelete())
                 delete m_finished[i];
 
+                /* Restore old OMP NUM Thread value */
+#if defined(_OPENMP)
+        omp_set_num_threads(m_omp_env_thread);
+#endif
     }
 
+    /*! \brief Set number of active threads */
     inline void setActiveThreadCount(int thread_count) { m_max_thread_count = thread_count; }
 
+    /*! \brief Add a thread to the pool */
     inline void addThread(CxxThread *thread)
     {
         m_pool.push(thread);
     }
 
-    inline bool StartNext()
-    {
-        auto thread = m_pool.front();
-        std::thread th = std::thread(&CxxThread::start, thread);
-        th.detach();
-        m_active.push_back(thread);
-        m_pool.pop();
-        return true;
-    }
-
-    inline void start()
+    /*! \brief Start threads and wait until all finished */
+    inline void StartAndWait()
     {
         while(m_pool.size() || m_active.size())
         {
@@ -120,7 +132,9 @@ public:
                 while(m_active.size() < m_max_thread_count)
                 {
                    StartNext();
+#ifdef _VERBOSE
                    printf(("Running %d, Waiting %d, Finished %d\n"), m_active.size(), m_pool.size(), m_finished.size());
+#endif
                 }
             }
             for(int i = 0; i < m_active.size(); ++i)
@@ -137,11 +151,22 @@ public:
         }
     }
 
-    inline void startThreads() { m_allow_start = true; start(); }
-    inline void stopThreads() { m_allow_start = false; }
+    // inline void startThreads() { m_allow_start = true; start(); }
+    // inline void stopThreads() { m_allow_start = false; }
 
 private:
+    inline bool StartNext()
+    {
+        auto thread = m_pool.front();
+        std::thread th = std::thread(&CxxThread::start, thread);
+        th.detach();
+        m_active.push_back(thread);
+        m_pool.pop();
+        return true;
+    }
+
     int m_max_thread_count = 1;
+    int m_omp_env_thread = 1;
     std::queue<CxxThread *>m_pool;
     std::vector<CxxThread *> m_active, m_finished;
     bool m_allow_start = true;
