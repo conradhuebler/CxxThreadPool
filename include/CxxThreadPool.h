@@ -25,6 +25,7 @@
 
 #pragma once
 
+#include <fstream>
 #include <iostream>
 #include <queue>
 #include <thread>
@@ -128,6 +129,18 @@ public:
         omp_set_num_threads(1);
 #endif
         setActiveThreadCount(m_omp_env_thread);
+        m_progress = new std::filebuf;
+    }
+
+    void EcoBar(bool ecobar)
+    {
+        m_ecobar = ecobar;
+    }
+    void RedirectOutput(std::filebuf* buffer)
+    {
+        m_progress = buffer;
+        std::clog.rdbuf(m_progress);
+        m_ecobar = true;
     }
 
     /*! \brief Clean up all threads
@@ -226,33 +239,64 @@ private:
 
     inline void Progress() const
     {
-#ifndef _CxxThreadPool_NoBar
         int finished = m_finished.size();
-        int active = m_active.size();
-        int cum_active = finished + m_active.size();
         double p_finished = finished / m_max;
-        double p_active = cum_active / m_max;
-        std::cerr << "[";
-        int bar_finished = bar_width * p_finished;
-        int bar_active = bar_width * p_active;
-        for (int i = 0; i < bar_width; ++i) {
-            if (i < bar_finished)
-                std::cerr << "=";
-            else if (i < bar_active && i > bar_finished)
-                std::cerr << "-";
-            else if (i > bar_active && i > bar_finished)
-                std::cerr << " ";
-        }
-        std::cerr << "] " << int(p_finished * 100.0) << " % finished jobs |" << int(active / m_max * 100.0) << " % active jobs |" << int(active / double(m_max_thread_count) * 100.0) << " % load \r";
-        std::cerr.flush();
+
+        if (m_ecobar) {
+            if (p_finished < 1e-5 && m_active.size() < m_max_thread_count && m_pool.size() > m_max_thread_count)
+                return;
+            if (p_finished * 10 >= m_small_progress) {
+                int active = m_active.size();
+                int cum_active = finished + m_active.size();
+                double p_active = cum_active / m_max;
+                std::clog << "[";
+                int bar_finished = bar_width * p_finished;
+                int bar_active = bar_width * p_active;
+                for (int i = 1; i < bar_width; ++i) {
+                    if (i <= bar_finished)
+                        std::clog << "=";
+                    else if (i <= bar_active && i > bar_finished)
+                        std::clog << "-";
+                    else if (i >= bar_active && i > bar_finished)
+                        std::clog << " ";
+                }
+                if (int(p_finished * 100.0) == 0)
+                    std::clog << "]   " << int(p_finished * 100.0) << " % finished jobs\n";
+                else if (int(p_finished * 100.0) == 100)
+                    std::clog << "] " << int(p_finished * 100.0) << " % finished jobs\n";
+                else
+                    std::clog << "]  " << int(p_finished * 100.0) << " % finished jobs\n";
+                m_small_progress += 1;
+            }
+        } else {
+#ifndef _CxxThreadPool_NoBar
+            int active = m_active.size();
+            int cum_active = finished + m_active.size();
+            double p_active = cum_active / m_max;
+            std::clog << "[";
+            int bar_finished = bar_width * p_finished;
+            int bar_active = bar_width * p_active;
+            for (int i = 1; i < bar_width; ++i) {
+                if (i <= bar_finished)
+                    std::clog << "=";
+                else if (i <= bar_active && i > bar_finished)
+                    std::clog << "-";
+                else if (i >= bar_active && i > bar_finished)
+                    std::clog << " ";
+            }
+            std::clog << "] " << int(p_finished * 100.0) << " % finished jobs |" << int(active / m_max * 100.0) << " % active jobs |" << int(active / double(m_max_thread_count) * 100.0) << " % load \r";
+            std::clog << std::flush;
 #endif
+        }
     }
 
     int m_max_thread_count = 1;
     int m_omp_env_thread = 1;
     int m_increment_id = 0;
+    mutable int m_small_progress = 0;
     double m_max = 0;
     std::queue<CxxThread *>m_pool;
     std::vector<CxxThread *> m_active, m_finished;
-    bool m_allow_start = true;
+    bool m_allow_start = true, m_ecobar = false, m_new_print = false;
+    std::filebuf* m_progress;
 };

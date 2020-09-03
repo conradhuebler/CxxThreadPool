@@ -61,6 +61,7 @@ int main()
     int max_threads = 400;
     CxxThreadPool *pool = new CxxThreadPool;
     pool->setActiveThreadCount(32);
+    //pool->EcoBar(true);
     for(int i = 0; i < max_threads; ++i)
     {
         Thread *thread = new Thread(rand_r(&seed)/1e6);
