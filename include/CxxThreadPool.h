@@ -79,26 +79,17 @@ public:
 
     virtual int execute() = 0;
 
-    //inline void wait()
-    //{
-    //    m_thread.join();
-    //}
+    inline bool AutoDelete() const { return m_autodelete; }
 
-    inline std::thread::id Id() const { return m_thread.get_id(); }
-    inline bool AutoDelete() const { return m_auto_delete; }
-
-    inline std::thread *Thread() { return &m_thread; }
+    inline void setAutoDelete(bool autodelete) { m_autodelete = autodelete; }
     inline void setIncrementId(int id) { m_increment_id = id; }
 
 private:
     bool m_running = true, m_finished = false;
-    bool m_auto_delete = true;
+    bool m_autodelete = true;
     int m_return = 0;
     std::chrono::time_point<std::chrono::system_clock> m_start, m_end;
     int m_increment_id = 0;
-
-protected:
-    std::thread m_thread;
 };
 
 class CxxThreadPool
@@ -144,14 +135,14 @@ public:
     }
 
     /*! \brief Clean up all threads
-     * TODO - consistent pointer handling - autodelete vs manual deletion
      */
     virtual ~CxxThreadPool()
     {
        while(m_pool.size())
        {
            auto thread = m_pool.front();
-           delete thread;
+           if (thread->AutoDelete())
+               delete thread;
            m_pool.pop();
        }
 
@@ -206,10 +197,12 @@ public:
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(wake_up));
         }
+        std::cout << std::endl;
     }
 
-    // inline void startThreads() { m_allow_start = true; start(); }
-    // inline void stopThreads() { m_allow_start = false; }
+    std::vector<CxxThread*>& Finished() { return m_finished; }
+    std::vector<CxxThread*>& Active() { return m_active; }
+    std::queue<CxxThread*>& Queue() { return m_pool; }
 
 private:
     inline bool StartNext()
@@ -261,11 +254,13 @@ private:
                         std::clog << " ";
                 }
                 if (int(p_finished * 100.0) == 0)
-                    std::clog << "]   " << int(p_finished * 100.0) << " % finished jobs\n";
+                    std::clog << "]   " << int(p_finished * 100.0) << " % finished jobs" << std::endl;
                 else if (int(p_finished * 100.0) == 100)
-                    std::clog << "] " << int(p_finished * 100.0) << " % finished jobs\n";
+                    std::clog << "] " << int(p_finished * 100.0) << " % finished jobs (" << std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now() - m_last).count() << " secs)" << std::endl;
                 else
-                    std::clog << "]  " << int(p_finished * 100.0) << " % finished jobs\n";
+                    std::clog << "]  " << int(p_finished * 100.0) << " % finished jobs (" << std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now() - m_last).count() << " secs)" << std::endl;
+                ;
+                m_last = std::chrono::system_clock::now();
                 m_small_progress += 1;
             }
         } else {
@@ -293,10 +288,12 @@ private:
     int m_max_thread_count = 1;
     int m_omp_env_thread = 1;
     int m_increment_id = 0;
-    mutable int m_small_progress = 0;
     double m_max = 0;
     std::queue<CxxThread *>m_pool;
     std::vector<CxxThread *> m_active, m_finished;
-    bool m_allow_start = true, m_ecobar = false, m_new_print = false;
+    bool m_ecobar = false;
     std::filebuf* m_progress;
+
+    mutable std::chrono::time_point<std::chrono::system_clock> m_last;
+    mutable int m_small_progress = 0;
 };

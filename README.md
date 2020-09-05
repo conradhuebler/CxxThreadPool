@@ -30,11 +30,26 @@ to control the number of active threads and add a single CxxThread derived objec
 ```cpp
 pool->addThread(thread);
 ```
-.
+. After adding a thread to the pool, CxxThreadPool takes ownership of the object and deletes it upon deleting the CxxThreadPool object. To prevent automatic deletion, set autodelete to false:
+```cpp
+thread->setAutoDelete(false);
+```
+Please take care of the object then.
 
-Finally, run all threads in queued and in parallel with
+Finally, run all queued threads parallel with
 ```cpp
 pool->StartAndWait();
+```
+
+Access to all finished threads can be obtained using the Finished() function:
+```cpp
+for(const auto *t : pool->Finished())
+{
+    const OwnThreadClass *thread = static_cast<const OwnThreadClass *>(t);
+    /*
+    do your fancy stuff
+    */
+}
 ```
 
 Increase verbosity by defining
