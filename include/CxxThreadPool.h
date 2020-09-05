@@ -92,6 +92,26 @@ private:
     int m_increment_id = 0;
 };
 
+class CxxBlockedThread : public CxxThread {
+public:
+    CxxBlockedThread() = default;
+    ~CxxBlockedThread() = default;
+
+    virtual int execute() override
+    {
+        for (int i = 0; i < m_threads.size(); ++i)
+            m_threads[i]->execute();
+        return 0;
+    }
+
+    inline void addThread(CxxThread* thread) { m_threads.push_back(thread); }
+
+    inline std::vector<CxxThread*>& Threads() { return m_threads; }
+
+private:
+    std::vector<CxxThread*> m_threads;
+};
+
 class CxxThreadPool
 {
 public:
@@ -169,9 +189,16 @@ public:
         m_pool.push(thread);
     }
 
+    inline void addThreads(const std::vector<CxxThread*>& threads)
+    {
+        for (auto thread : threads)
+            addThread(thread);
+    }
+
     /*! \brief Start threads and wait until all finished */
     inline void StartAndWait()
     {
+        m_start = std::chrono::system_clock::now();
         m_max = m_pool.size();
         bool start_next = true;
         while ((m_pool.size() || m_active.size())) {
@@ -197,12 +224,103 @@ public:
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(wake_up));
         }
+
+        if (m_reorganised) {
+            std::vector<CxxThread*> finished;
+            for (int i = 0; i < m_finished.size(); ++i) {
+                auto vector = static_cast<CxxBlockedThread*>(m_finished[i])->Threads();
+                finished.insert(finished.end(), vector.begin(), vector.end());
+                delete m_finished[i];
+            }
+            m_finished = finished;
+        }
+        m_end = std::chrono::system_clock::now();
+        //#ifdef _CxxThreadPool_Verbose
         std::cout << std::endl;
+        std::cout << "CxxThreadPool::StartandWait() - Threads finished after " << std::chrono::duration_cast<std::chrono::milliseconds>(m_end - m_start).count() << " mseconds." << std::endl;
+        //#endif
+    }
+
+    void DynamicPool(int divide = 2)
+    {
+        if (m_pool.size() / 2 / m_max_thread_count == 0)
+            return;
+        // std::cout << "Threads before " << m_pool.size() << std::endl;
+        m_reorganised = true;
+        std::vector<CxxThread*> threads;
+        while (m_pool.size()) {
+            int block_size = m_pool.size() / divide;
+            int thread_count = block_size / m_max_thread_count;
+            // std::cout << m_pool.size() << " " << block_size << " " << thread_count << std::endl;
+            if (thread_count) {
+                for (int j = 0; j < m_max_thread_count; ++j) {
+                    CxxBlockedThread* thread = new CxxBlockedThread;
+                    for (int i = 0; i < thread_count; ++i) {
+                        if (m_pool.size() == 0) {
+                            addThreads(threads);
+                            return;
+                        }
+                        thread->addThread(m_pool.front());
+                        m_pool.pop();
+                    }
+                    threads.push_back(thread);
+                }
+            } else {
+                CxxBlockedThread* thread = new CxxBlockedThread;
+                thread->addThread(m_pool.front());
+                m_pool.pop();
+                threads.push_back(thread);
+            }
+        }
+        addThreads(threads);
+        // std::cout << "Threads after " << m_pool.size() << std::endl;
+    }
+
+    void StaticPool()
+    {
+        if (m_pool.size() / 2 / m_max_thread_count == 0)
+            return;
+        // std::cout << "Threads before " << m_pool.size() << std::endl;
+        m_reorganised = true;
+        std::vector<CxxThread*> threads;
+        while (m_pool.size()) {
+            int block_size = m_pool.size();
+            int thread_count = block_size / m_max_thread_count;
+            // std::cout << m_pool.size() << " " << block_size << " " << thread_count << std::endl;
+            if (thread_count) {
+                for (int j = 0; j < m_max_thread_count; ++j) {
+                    CxxBlockedThread* thread = new CxxBlockedThread;
+                    for (int i = 0; i < thread_count; ++i) {
+                        if (m_pool.size() == 0) {
+                            addThreads(threads);
+                            return;
+                        }
+                        thread->addThread(m_pool.front());
+                        m_pool.pop();
+                    }
+                    threads.push_back(thread);
+                }
+            } else {
+                CxxBlockedThread* thread = new CxxBlockedThread;
+                thread->addThread(m_pool.front());
+                m_pool.pop();
+                threads.push_back(thread);
+            }
+        }
+        addThreads(threads);
+        // std::cout << "Threads after " << m_pool.size() << std::endl;
     }
 
     std::vector<CxxThread*>& Finished() { return m_finished; }
     std::vector<CxxThread*>& Active() { return m_active; }
     std::queue<CxxThread*>& Queue() { return m_pool; }
+
+    void Reset()
+    {
+        for (int i = 0; i < m_finished.size(); ++i)
+            m_pool.push(m_finished[i]);
+        m_finished.clear();
+    }
 
 private:
     inline bool StartNext()
@@ -291,9 +409,9 @@ private:
     double m_max = 0;
     std::queue<CxxThread *>m_pool;
     std::vector<CxxThread *> m_active, m_finished;
-    bool m_ecobar = false;
+    bool m_ecobar = false, m_reorganised = false;
     std::filebuf* m_progress;
-
+    std::chrono::time_point<std::chrono::system_clock> m_start, m_end;
     mutable std::chrono::time_point<std::chrono::system_clock> m_last;
     mutable int m_small_progress = 0;
 };

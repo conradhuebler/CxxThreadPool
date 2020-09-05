@@ -44,9 +44,9 @@ public:
 
     inline int execute()
     {
-        printf("Thread %d started  ...\n", m_rand);
+        //printf("Thread %d started  ...\n", m_rand);
         std::this_thread::sleep_for(std::chrono::milliseconds(m_rand));
-        printf("Thread finished! ... %d ... \n", m_rand);
+        //printf("Thread finished! ... %d ... \n", m_rand);
         return 0;
     }
 private:
@@ -58,15 +58,56 @@ int main()
 {
     unsigned int seed = time(NULL);
     RunTimer timer(true);
-    int max_threads = 400;
+    int max_threads = 1000;
+    int active_threads = 32;
     CxxThreadPool *pool = new CxxThreadPool;
-    pool->setActiveThreadCount(32);
+    pool->setActiveThreadCount(active_threads);
     //pool->EcoBar(true);
+    std::cout << "This a example application to present the CxxThreadPool method!\nThe demo will run with " << max_threads << " jobs and " << active_threads << " active threads!\n";
+    std::cout << "Each thread will be initialised with a random number : rand_r(&seed)/1e6 - that equals the msecs to sleep.\n";
+    std::cout << "The thread pool will run a couple of times - with the same threads and random numbers to demonstrate the :\nSingle Pool,\nStatic Pool and\nDynamic Pool ability of the CxxThreadPool Class.\n\n";
     for(int i = 0; i < max_threads; ++i)
     {
         Thread *thread = new Thread(rand_r(&seed)/1e6);
         pool->addThread(thread);
     }
+    std::cout << "Single Pool: Each thread will be run isolated, so " << max_threads << " will be executed." << std::endl;
+    pool->StartAndWait();
+
+    pool->Reset();
+
+    std::cout << "Static Pool: " << max_threads / active_threads << " threads will be executed ( + remaining individual threads )." << std::endl;
+    pool->StaticPool();
+    pool->StartAndWait();
+
+    pool->Reset();
+    std::cout << "Dynamic Pool with divider 1: " << max_threads / active_threads << " threads will be executed ( + remaining individual threads )." << std::endl;
+
+    pool->DynamicPool(1);
+    pool->StartAndWait();
+
+    pool->Reset();
+
+    std::cout << "Dynamic Pool with divider 2." << std::endl;
+    pool->DynamicPool();
+    pool->StartAndWait();
+
+    pool->Reset();
+
+    std::cout << "Dynamic Pool with divider 3." << std::endl;
+    pool->DynamicPool(3);
+    pool->StartAndWait();
+
+    pool->Reset();
+
+    std::cout << "Dynamic Pool with divider 4." << std::endl;
+    pool->DynamicPool(4);
+    pool->StartAndWait();
+
+    pool->Reset();
+
+    std::cout << "Dynamic Pool with divider 5." << std::endl;
+    pool->DynamicPool(4);
     pool->StartAndWait();
     return 0;
 }
