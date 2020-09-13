@@ -35,12 +35,6 @@
 #include <omp.h>
 #endif
 
-#ifndef _CxxThreadPool_TimeOut
-static int wake_up = 100;
-#else
-static int wake_up = _CxxThreadPool_TimeOut;
-#endif
-
 #ifndef _CxxThreadPool_BarWidth
 static int bar_width = 100;
 #else
@@ -62,8 +56,9 @@ public:
         m_running = false;
         m_finished = true;
         m_end = std::chrono::system_clock::now();
+        m_time = std::chrono::duration_cast<std::chrono::milliseconds>(m_end - m_start).count();
 #ifdef _CxxThreadPool_Verbose
-        std::cout << "CxxThread::start() - Thread  " << m_increment_id << " finished after " << std::chrono::duration_cast<std::chrono::milliseconds>(m_end - m_start).count() << " mseconds." << std::endl;
+        std::cout << "CxxThread::start() - Thread  " << m_increment_id << " finished after " << m_time << " mseconds." << std::endl;
 #endif
     }
 
@@ -83,6 +78,7 @@ public:
 
     inline void setAutoDelete(bool autodelete) { m_autodelete = autodelete; }
     inline void setIncrementId(int id) { m_increment_id = id; }
+    inline int Time() const { return m_time; }
 
 private:
     bool m_running = true, m_finished = false;
@@ -90,6 +86,7 @@ private:
     int m_return = 0;
     std::chrono::time_point<std::chrono::system_clock> m_start, m_end;
     int m_increment_id = 0;
+    int m_time = 0;
 };
 
 class CxxBlockedThread : public CxxThread {
@@ -117,9 +114,15 @@ class CxxThreadPool
 public:
     CxxThreadPool()
     {
+#ifndef _CxxThreadPool_TimeOut
+        m_wake_up = 100;
+#else
+        m_wake_up = _CxxThreadPool_TimeOut;
+#endif
+
 #ifdef _CxxThreadPool_Verbose
         std::cout << "CxxThreadPool::CxxThreadPool() - Setting up thread pool for usage" << std::endl;
-        std::cout << "CxxThreadPool::CxxThreadPool() - Wake up every " << wake_up << " msecs." << std::endl;
+        std::cout << "CxxThreadPool::CxxThreadPool() - Wake up every " << m_wake_up << " msecs." << std::endl;
 #endif
 
         /* Set active threads to OMP NUM Threads and set OMP NUM Threads to 1 */
@@ -199,32 +202,12 @@ public:
     inline void StartAndWait()
     {
         m_start = std::chrono::system_clock::now();
-        m_max = m_pool.size();
-        bool start_next = true;
-        while ((m_pool.size() || m_active.size())) {
-            if (m_pool.size() > 0) {
-                while(m_active.size() < m_max_thread_count)
-                {
-                    if (!StartNext())
-                        break;
-                    Status();
-                }
-            }
-            for(int i = 0; i < m_active.size(); ++i)
-            {
-                if(!m_active[i]->Finished())
-                    continue;
-                else
-                {
-                    m_finished.push_back(m_active[i]);
-                    m_active.erase(m_active.begin() + i);
-                    Status();
-                    continue;
-                }
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(wake_up));
-        }
 
+        if (m_max_thread_count == 1) {
+            SerialLoop();
+        } else {
+            ParallelLoop();
+        }
         if (m_reorganised) {
             std::vector<CxxThread*> finished;
             for (int i = 0; i < m_finished.size(); ++i) {
@@ -235,10 +218,10 @@ public:
             m_finished = finished;
         }
         m_end = std::chrono::system_clock::now();
-        //#ifdef _CxxThreadPool_Verbose
+        // #ifdef _CxxThreadPool_Verbose
         std::cout << std::endl;
         std::cout << "CxxThreadPool::StartandWait() - Threads finished after " << std::chrono::duration_cast<std::chrono::milliseconds>(m_end - m_start).count() << " mseconds." << std::endl;
-        //#endif
+        // #endif
     }
 
     void DynamicPool(int divide = 2)
@@ -322,6 +305,9 @@ public:
         m_finished.clear();
     }
 
+    inline int WakeUp() const { return m_wake_up; }
+    inline void setWakeUp(int wakeup) { m_wake_up = wakeup; }
+
 private:
     inline bool StartNext()
     {
@@ -335,6 +321,45 @@ private:
         m_active.push_back(thread);
         m_pool.pop();
         return m_pool.size();
+    }
+
+    inline void SerialLoop()
+    {
+        while (m_pool.size()) {
+            auto thread = m_pool.front();
+            thread->execute();
+            m_pool.pop();
+            m_finished.push_back(thread);
+        }
+    }
+
+    inline void ParallelLoop()
+    {
+        m_max = m_pool.size();
+        bool start_next = true;
+        while ((m_pool.size() || m_active.size())) {
+            if (m_pool.size() > 0) {
+                while (m_active.size() < m_max_thread_count) {
+                    if (!StartNext())
+                        break;
+                    Status();
+                }
+            }
+            for (int i = 0; i < m_active.size(); ++i) {
+                if (!m_active[i]->Finished())
+                    continue;
+                else {
+                    m_finished.push_back(m_active[i]);
+                    int time = m_active[i]->Time();
+                    if (time < m_wake_up)
+                        m_wake_up = time;
+                    m_active.erase(m_active.begin() + i);
+                    Status();
+                    continue;
+                }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(m_wake_up));
+        }
     }
 
     inline void Status() const
@@ -406,6 +431,7 @@ private:
     int m_max_thread_count = 1;
     int m_omp_env_thread = 1;
     int m_increment_id = 0;
+    int m_wake_up = 100;
     double m_max = 0;
     std::queue<CxxThread *>m_pool;
     std::vector<CxxThread *> m_active, m_finished;
