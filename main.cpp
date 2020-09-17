@@ -22,7 +22,6 @@
  */
 
 // #define _CxxThreadPool_Verbose
-// #define _CxxThreadPool_NoBar
 
 #define _CxxThreadPool_BarWidth 100
 
@@ -38,7 +37,6 @@ class Thread : public CxxThread{
 public:
     Thread(int rand) : m_rand(rand)
     {
-
     }
     ~Thread() = default;
 
@@ -62,6 +60,8 @@ int main()
     int active_threads = 32;
     CxxThreadPool *pool = new CxxThreadPool;
     pool->setActiveThreadCount(active_threads);
+    pool->setProgressBar(CxxThreadPool::ProgressBarType::Discrete);
+
     //pool->EcoBar(true);
     std::cout << "This a example application to present the CxxThreadPool method!\nThe demo will run with " << max_threads << " jobs and " << active_threads << " active threads!\n";
     std::cout << "Each thread will be initialised with a random number : rand_r(&seed)/1e6 - that equals the msecs to sleep.\n";
@@ -109,5 +109,6 @@ int main()
     std::cout << "Dynamic Pool with divider 5." << std::endl;
     pool->DynamicPool(4);
     pool->StartAndWait();
+
     return 0;
 }

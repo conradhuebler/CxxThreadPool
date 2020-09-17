@@ -1,3 +1,4 @@
+[![CodeFactor](https://www.codefactor.io/repository/github/conradhuebler/cxxthreadpool/badge)](https://www.codefactor.io/repository/github/conradhuebler/cxxthreadpool)
 # CxxThreadPool
 
 Simple, header-only Thread Pool Class for C++11 ( or newer ). Inspired by the Qt ThreadPool Class. A progress bar will be printed out to cerr.

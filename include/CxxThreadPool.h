@@ -35,11 +35,6 @@
 #include <omp.h>
 #endif
 
-#ifndef _CxxThreadPool_BarWidth
-static int bar_width = 100;
-#else
-static int bar_width = _CxxThreadPool_BarWidth;
-#endif
 
 class CxxThread {
 public:
@@ -94,7 +89,7 @@ public:
     CxxBlockedThread() = default;
     ~CxxBlockedThread() = default;
 
-    virtual int execute() override
+    int execute() override
     {
         for (int i = 0; i < m_threads.size(); ++i)
             m_threads[i]->execute();
@@ -112,13 +107,33 @@ private:
 class CxxThreadPool
 {
 public:
+    enum class ProgressBarType {
+        None = 0,
+        Discrete = 1,
+        Continously = 2
+    };
+
     CxxThreadPool()
     {
-#ifndef _CxxThreadPool_TimeOut
-        m_wake_up = 100;
-#else
-        m_wake_up = _CxxThreadPool_TimeOut;
-#endif
+        const char* val = std::getenv("CxxThreadBar");
+        if (val == nullptr) { // invalid to assign nullptr to std::string
+
+        } else {
+            int i = 0;
+
+            i = atoi(std::getenv("CxxThreadBar"));
+            if (i == 0) {
+                m_evn_overwrite_bar = true;
+                m_progresstype = ProgressBarType::None;
+            } else if (i == 1) {
+                m_evn_overwrite_bar = true;
+                m_progresstype = ProgressBarType::Discrete;
+            } else if (i == 2) {
+                m_evn_overwrite_bar = true;
+                m_progresstype = ProgressBarType::Continously;
+            } else
+                m_evn_overwrite_bar = false;
+        }
 
 #ifdef _CxxThreadPool_Verbose
         std::cout << "CxxThreadPool::CxxThreadPool() - Setting up thread pool for usage" << std::endl;
@@ -131,30 +146,19 @@ public:
 #ifdef _CxxThreadPool_Verbose
         std::cout << "CxxThreadPool::CxxThreadPool() - openMP is enabled, getting OMP_NUM_THREADS" << std::endl;
 #endif
-        const char* val = std::getenv("OMP_NUM_THREADS");
+        val = std::getenv("OMP_NUM_THREADS");
         if (val == nullptr) { // invalid to assign nullptr to std::string
             m_omp_env_thread = 1;
         } else {
             m_omp_env_thread = std::max(atoi(std::getenv("OMP_NUM_THREADS")), 1);
         }
+
 #ifdef _CxxThreadPool_Verbose
         std::cout << "CxxThreadPool::CxxThreadPool() - OMP_NUM_THREADS was " << m_omp_env_thread << std::endl;
 #endif
         omp_set_num_threads(1);
 #endif
         setActiveThreadCount(m_omp_env_thread);
-        m_progress = new std::filebuf;
-    }
-
-    void EcoBar(bool ecobar)
-    {
-        m_ecobar = ecobar;
-    }
-    void RedirectOutput(std::filebuf* buffer)
-    {
-        m_progress = buffer;
-        std::clog.rdbuf(m_progress);
-        m_ecobar = true;
     }
 
     /*! \brief Clean up all threads
@@ -181,6 +185,20 @@ public:
 #if defined(_OPENMP)
         omp_set_num_threads(m_omp_env_thread);
 #endif
+    }
+
+    /*! \brief Set the progress bar type
+     * 0 = None, nothing will appear
+     * 1 = Discrete, every 10 % a new line will be printed to cout
+     * 2 = After each finished or actived thread, a flushed bar will be printed to cout
+     * with the environment variable
+     * CxxThreadBar
+     * the bar can be controlled from the console - it will overwrite any programm specific settings */
+    inline void setProgressBar(ProgressBarType type)
+    {
+        if (m_evn_overwrite_bar)
+            return;
+        m_progresstype = type;
     }
 
     /*! \brief Set number of active threads */
@@ -218,23 +236,22 @@ public:
             m_finished = finished;
         }
         m_end = std::chrono::system_clock::now();
-        // #ifdef _CxxThreadPool_Verbose
+        std::cout << std::endl;
+#ifdef _CxxThreadPool_Verbose
         std::cout << std::endl;
         std::cout << "CxxThreadPool::StartandWait() - Threads finished after " << std::chrono::duration_cast<std::chrono::milliseconds>(m_end - m_start).count() << " mseconds." << std::endl;
-        // #endif
+#endif
     }
 
     void DynamicPool(int divide = 2)
     {
         if (m_pool.size() / 2 / m_max_thread_count == 0)
             return;
-        // std::cout << "Threads before " << m_pool.size() << std::endl;
         m_reorganised = true;
         std::vector<CxxThread*> threads;
         while (m_pool.size()) {
             int block_size = m_pool.size() / divide;
             int thread_count = block_size / m_max_thread_count;
-            // std::cout << m_pool.size() << " " << block_size << " " << thread_count << std::endl;
             if (thread_count) {
                 for (int j = 0; j < m_max_thread_count; ++j) {
                     CxxBlockedThread* thread = new CxxBlockedThread;
@@ -256,20 +273,17 @@ public:
             }
         }
         addThreads(threads);
-        // std::cout << "Threads after " << m_pool.size() << std::endl;
     }
 
     void StaticPool()
     {
         if (m_pool.size() / 2 / m_max_thread_count == 0)
             return;
-        // std::cout << "Threads before " << m_pool.size() << std::endl;
         m_reorganised = true;
         std::vector<CxxThread*> threads;
         while (m_pool.size()) {
             int block_size = m_pool.size();
             int thread_count = block_size / m_max_thread_count;
-            // std::cout << m_pool.size() << " " << block_size << " " << thread_count << std::endl;
             if (thread_count) {
                 for (int j = 0; j < m_max_thread_count; ++j) {
                     CxxBlockedThread* thread = new CxxBlockedThread;
@@ -291,7 +305,6 @@ public:
             }
         }
         addThreads(threads);
-        // std::cout << "Threads after " << m_pool.size() << std::endl;
     }
 
     std::vector<CxxThread*>& Finished() { return m_finished; }
@@ -307,6 +320,7 @@ public:
 
     inline int WakeUp() const { return m_wake_up; }
     inline void setWakeUp(int wakeup) { m_wake_up = wakeup; }
+    inline void setBarWidth(int width) { m_bar_width = width; }
 
 private:
     inline bool StartNext()
@@ -367,7 +381,6 @@ private:
 #ifdef _CxxThreadPool_Verbose
         printf(("\n\nCxxThreadPool::Status() - Running %d, Waiting %d, Finished %d\n\n"), m_active.size(), m_pool.size(), m_finished.size());
 #endif
-
 #ifndef _CxxThreadPool_Verbose
         Progress();
 #endif
@@ -375,68 +388,86 @@ private:
 
     inline void Progress() const
     {
-        int finished = m_finished.size();
-        double p_finished = finished / m_max;
+        switch (m_progresstype) {
+        case ProgressBarType::Discrete:
+            DiscreteProgress();
+            break;
 
-        if (m_ecobar) {
-            if (p_finished < 1e-5 && m_active.size() < m_max_thread_count && m_pool.size() > m_max_thread_count)
-                return;
-            if (p_finished * 10 >= m_small_progress) {
-                int active = m_active.size();
-                int cum_active = finished + m_active.size();
-                double p_active = cum_active / m_max;
-                std::clog << "[";
-                int bar_finished = bar_width * p_finished;
-                int bar_active = bar_width * p_active;
-                for (int i = 1; i < bar_width; ++i) {
-                    if (i <= bar_finished)
-                        std::clog << "=";
-                    else if (i <= bar_active && i > bar_finished)
-                        std::clog << "-";
-                    else if (i >= bar_active && i > bar_finished)
-                        std::clog << " ";
-                }
-                if (int(p_finished * 100.0) == 0)
-                    std::clog << "]   " << int(p_finished * 100.0) << " % finished jobs" << std::endl;
-                else if (int(p_finished * 100.0) == 100)
-                    std::clog << "] " << int(p_finished * 100.0) << " % finished jobs (" << std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now() - m_last).count() << " secs)" << std::endl;
-                else
-                    std::clog << "]  " << int(p_finished * 100.0) << " % finished jobs (" << std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now() - m_last).count() << " secs)" << std::endl;
-                ;
-                m_last = std::chrono::system_clock::now();
-                m_small_progress += 1;
-            }
-        } else {
-#ifndef _CxxThreadPool_NoBar
-            int active = m_active.size();
-            int cum_active = finished + m_active.size();
-            double p_active = cum_active / m_max;
-            std::clog << "[";
-            int bar_finished = bar_width * p_finished;
-            int bar_active = bar_width * p_active;
-            for (int i = 1; i < bar_width; ++i) {
-                if (i <= bar_finished)
-                    std::clog << "=";
-                else if (i <= bar_active && i > bar_finished)
-                    std::clog << "-";
-                else if (i >= bar_active && i > bar_finished)
-                    std::clog << " ";
-            }
-            std::clog << "] " << int(p_finished * 100.0) << " % finished jobs |" << int(active / m_max * 100.0) << " % active jobs |" << int(active / double(m_max_thread_count) * 100.0) << " % load \r";
-            std::clog << std::flush;
-#endif
+        case ProgressBarType::Continously:
+            ContinousProgress();
+            break;
+
+        case ProgressBarType::None:
+        default:
+            break;
         }
     }
 
+    inline void DiscreteProgress() const
+    {
+        int finished = m_finished.size();
+        double p_finished = finished / m_max;
+        if (p_finished < 1e-5 && m_active.size() < m_max_thread_count && m_pool.size() > m_max_thread_count)
+            return;
+        if (p_finished * 10 >= m_small_progress) {
+            int active = m_active.size();
+            int cum_active = finished + m_active.size();
+            double p_active = cum_active / m_max;
+            std::cout << "[";
+            int bar_finished = m_bar_width * p_finished;
+            int bar_active = m_bar_width * p_active;
+            for (int i = 1; i < m_bar_width; ++i) {
+                if (i <= bar_finished)
+                    std::cout << "=";
+                else if (i <= bar_active && i > bar_finished)
+                    std::cout << "-";
+                else if (i >= bar_active && i > bar_finished)
+                    std::cout << " ";
+            }
+            if (int(p_finished * 100.0) == 0)
+                std::cout << "]   " << int(p_finished * 100.0) << " % finished jobs" << std::endl;
+            else if (int(p_finished * 100.0) == 100)
+                std::cout << "] " << int(p_finished * 100.0) << " % finished jobs (" << std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now() - m_last).count() << " secs)" << std::endl;
+            else
+                std::cout << "]  " << int(p_finished * 100.0) << " % finished jobs (" << std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now() - m_last).count() << " secs)" << std::endl;
+            m_last = std::chrono::system_clock::now();
+            m_small_progress += 1;
+        }
+    }
+
+    inline void ContinousProgress() const
+    {
+        int finished = m_finished.size();
+        double p_finished = finished / m_max;
+        int active = m_active.size();
+        int cum_active = finished + m_active.size();
+        double p_active = cum_active / m_max;
+        std::cout << "[";
+        int bar_finished = m_bar_width * p_finished;
+        int bar_active = m_bar_width * p_active;
+        for (int i = 1; i < m_bar_width; ++i) {
+            if (i <= bar_finished)
+                std::cout << "=";
+            else if (i <= bar_active && i > bar_finished)
+                std::cout << "-";
+            else if (i >= bar_active && i > bar_finished)
+                std::cout << " ";
+        }
+        std::cout << "] " << int(p_finished * 100.0) << " % finished jobs |" << int(active / m_max * 100.0) << " % active jobs |" << int(active / double(m_max_thread_count) * 100.0) << " % load \r";
+        std::cout << std::flush;
+    }
+
+    ProgressBarType m_progresstype = ProgressBarType::Continously;
     int m_max_thread_count = 1;
     int m_omp_env_thread = 1;
     int m_increment_id = 0;
     int m_wake_up = 100;
+    int m_bar_width = 100;
+
     double m_max = 0;
     std::queue<CxxThread *>m_pool;
     std::vector<CxxThread *> m_active, m_finished;
-    bool m_ecobar = false, m_reorganised = false;
-    std::filebuf* m_progress;
+    bool m_reorganised = false, m_evn_overwrite_bar = false;
     std::chrono::time_point<std::chrono::system_clock> m_start, m_end;
     mutable std::chrono::time_point<std::chrono::system_clock> m_last;
     mutable int m_small_progress = 0;
