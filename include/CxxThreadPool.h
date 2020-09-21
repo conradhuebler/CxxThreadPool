@@ -117,7 +117,6 @@ public:
     {
         const char* val = std::getenv("CxxThreadBar");
         if (val == nullptr) { // invalid to assign nullptr to std::string
-
         } else {
             int i = 0;
 
@@ -236,7 +235,7 @@ public:
             m_finished = finished;
         }
         m_end = std::chrono::system_clock::now();
-        std::cout << std::endl;
+        //std::cout << std::endl;
 #ifdef _CxxThreadPool_Verbose
         std::cout << std::endl;
         std::cout << "CxxThreadPool::StartandWait() - Threads finished after " << std::chrono::duration_cast<std::chrono::milliseconds>(m_end - m_start).count() << " mseconds." << std::endl;
