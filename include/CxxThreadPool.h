@@ -27,6 +27,7 @@
 
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <queue>
 #include <thread>
 #include <vector>
@@ -57,12 +58,12 @@ public:
 #endif
     }
 
-    inline bool Running()
+    inline bool Running() const
     {
         return m_running;
     }
 
-    inline bool Finished()
+    inline bool Finished() const
     {
         return m_finished;
     }
@@ -207,6 +208,7 @@ public:
     inline void addThread(CxxThread *thread)
     {
         m_pool.push(thread);
+        m_threads_map.insert(std::pair<int, CxxThread*>(m_pool.size() - 1, thread));
     }
 
     inline void addThreads(const std::vector<CxxThread*>& threads)
@@ -309,6 +311,8 @@ public:
     std::vector<CxxThread*>& Finished() { return m_finished; }
     std::vector<CxxThread*>& Active() { return m_active; }
     std::queue<CxxThread*>& Queue() { return m_pool; }
+
+    std::map<int, CxxThread*>& OrderedList() { return m_threads_map; }
 
     void Reset()
     {
@@ -466,6 +470,7 @@ private:
     double m_max = 0;
     std::queue<CxxThread *>m_pool;
     std::vector<CxxThread *> m_active, m_finished;
+    std::map<int, CxxThread*> m_threads_map;
     bool m_reorganised = false, m_evn_overwrite_bar = false;
     std::chrono::time_point<std::chrono::system_clock> m_start, m_end;
     mutable std::chrono::time_point<std::chrono::system_clock> m_last;
