@@ -344,7 +344,7 @@ private:
     {
         while (m_pool.size()) {
             auto thread = m_pool.front();
-            thread->execute();
+            thread->start();
             m_pool.pop();
             m_finished.push_back(thread);
         }
