@@ -223,7 +223,8 @@ public:
         m_start = std::chrono::system_clock::now();
 
         if (m_max_thread_count == 1) {
-            SerialLoop();
+            // SerialLoop();
+            ParallelLoop();
         } else {
             ParallelLoop();
         }
@@ -416,23 +417,23 @@ private:
             int active = m_active.size();
             int cum_active = finished + m_active.size();
             double p_active = cum_active / m_max;
-            std::cout << "[";
+            std::cerr << "[";
             int bar_finished = m_bar_width * p_finished;
             int bar_active = m_bar_width * p_active;
             for (int i = 1; i < m_bar_width; ++i) {
                 if (i <= bar_finished)
-                    std::cout << "=";
+                    std::cerr << "=";
                 else if (i <= bar_active && i > bar_finished)
-                    std::cout << "-";
+                    std::cerr << "-";
                 else if (i >= bar_active && i > bar_finished)
-                    std::cout << " ";
+                    std::cerr << " ";
             }
             if (int(p_finished * 100.0) == 0)
-                std::cout << "]   " << int(p_finished * 100.0) << " % finished jobs" << std::endl;
+                std::cerr << "]   " << int(p_finished * 100.0) << " % finished jobs" << std::endl;
             else if (int(p_finished * 100.0) == 100)
-                std::cout << "] " << int(p_finished * 100.0) << " % finished jobs (" << std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now() - m_last).count() << " secs)" << std::endl;
+                std::cerr << "] " << int(p_finished * 100.0) << " % finished jobs (" << std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now() - m_last).count() << " secs)" << std::endl;
             else
-                std::cout << "]  " << int(p_finished * 100.0) << " % finished jobs (" << std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now() - m_last).count() << " secs)" << std::endl;
+                std::cerr << "]  " << int(p_finished * 100.0) << " % finished jobs (" << std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now() - m_last).count() << " secs)" << std::endl;
             m_last = std::chrono::system_clock::now();
             m_small_progress += 1;
         }
@@ -445,19 +446,19 @@ private:
         int active = m_active.size();
         int cum_active = finished + m_active.size();
         double p_active = cum_active / m_max;
-        std::cout << "[";
+        std::cerr << "[";
         int bar_finished = m_bar_width * p_finished;
         int bar_active = m_bar_width * p_active;
         for (int i = 1; i < m_bar_width; ++i) {
             if (i <= bar_finished)
-                std::cout << "=";
+                std::cerr << "=";
             else if (i <= bar_active && i > bar_finished)
-                std::cout << "-";
+                std::cerr << "-";
             else if (i >= bar_active && i > bar_finished)
-                std::cout << " ";
+                std::cerr << " ";
         }
-        std::cout << "] " << int(p_finished * 100.0) << " % finished jobs |" << int(active / m_max * 100.0) << " % active jobs |" << int(active / double(m_max_thread_count) * 100.0) << " % load \r";
-        std::cout << std::flush;
+        std::cerr << "] " << int(p_finished * 100.0) << " % finished jobs |" << int(active / m_max * 100.0) << " % active jobs |" << int(active / double(m_max_thread_count) * 100.0) << " % load \r";
+        std::cerr << std::flush;
     }
 
     ProgressBarType m_progresstype = ProgressBarType::Continously;
