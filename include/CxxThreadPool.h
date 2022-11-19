@@ -69,12 +69,14 @@ public:
     }
 
     virtual int execute() = 0;
+    void reset() { m_finished = false; }
 
     inline bool AutoDelete() const { return m_autodelete; }
 
     inline void setAutoDelete(bool autodelete) { m_autodelete = autodelete; }
     inline void setIncrementId(int id) { m_increment_id = id; }
     inline int Time() const { return m_time; }
+    virtual inline bool BreakThreadPool() const { return false; }
 
 private:
     bool m_running = true, m_finished = false;
@@ -317,8 +319,31 @@ public:
 
     void Reset()
     {
-        for (int i = 0; i < m_finished.size(); ++i)
+        for (int i = 0; i < m_finished.size(); ++i) {
+            m_finished[i]->reset();
             m_pool.push(m_finished[i]);
+        }
+        m_finished.clear();
+    }
+
+    void clear()
+    {
+        while (m_pool.size()) {
+            auto thread = m_pool.front();
+            if (thread->AutoDelete())
+                delete thread;
+            m_pool.pop();
+        }
+
+        for (int i = 0; i < m_active.size(); ++i)
+            if (m_active[i]->AutoDelete())
+                delete m_active[i];
+
+        for (int i = 0; i < m_finished.size(); ++i)
+            if (m_finished[i]->AutoDelete())
+                delete m_finished[i];
+
+        m_active.clear();
         m_finished.clear();
     }
 
@@ -334,8 +359,9 @@ private:
             return false;
         thread->setIncrementId(m_increment_id);
         m_increment_id++;
-        std::thread th = std::thread(&CxxThread::start, thread);
-        th.detach();
+        std::thread* th = new std::thread(&CxxThread::start, thread);
+        // th->detach();
+        m_running_threads.push_back(std::pair<std::thread*, CxxThread*>(th, thread));
         m_active.push_back(thread);
         m_pool.pop();
         return m_pool.size();
@@ -348,6 +374,8 @@ private:
             thread->start();
             m_pool.pop();
             m_finished.push_back(thread);
+            if (thread->BreakThreadPool())
+                break;
         }
     }
 
@@ -355,7 +383,7 @@ private:
     {
         m_max = m_pool.size();
         bool start_next = true;
-        while ((m_pool.size() || m_active.size())) {
+        while (((m_pool.size() || m_active.size()) && start_next)) {
             if (m_pool.size() > 0) {
                 while (m_active.size() < m_max_thread_count) {
                     if (!StartNext())
@@ -367,10 +395,21 @@ private:
                 if (!m_active[i]->Finished())
                     continue;
                 else {
+                    for (int j = 0; j < m_running_threads.size(); ++j) {
+                        if (m_running_threads[j].second == m_active[i] && m_running_threads[j].first->joinable()) {
+                            m_running_threads[j].first->join();
+                            delete m_running_threads[j].first;
+                            m_running_threads.erase(m_running_threads.begin() + j);
+                            break;
+                        }
+                    }
                     m_finished.push_back(m_active[i]);
                     int time = m_active[i]->Time();
                     if (time < m_wake_up)
                         m_wake_up = time;
+                    if (m_active[i]->BreakThreadPool()) {
+                        start_next = false;
+                    }
                     m_active.erase(m_active.begin() + i);
                     Status();
                     continue;
@@ -472,6 +511,7 @@ private:
     std::queue<CxxThread *>m_pool;
     std::vector<CxxThread *> m_active, m_finished;
     std::map<int, CxxThread*> m_threads_map;
+    std::vector<std::pair<std::thread*, CxxThread*>> m_running_threads;
     bool m_reorganised = false, m_evn_overwrite_bar = false;
     std::chrono::time_point<std::chrono::system_clock> m_start, m_end;
     mutable std::chrono::time_point<std::chrono::system_clock> m_last;
