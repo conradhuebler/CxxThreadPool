@@ -249,6 +249,8 @@ public:
 
     void DynamicPool(int divide = 2)
     {
+        m_reorganised = false;
+
         if (m_pool.size() / 2 / m_max_thread_count == 0)
             return;
         m_reorganised = true;
@@ -281,6 +283,8 @@ public:
 
     void StaticPool()
     {
+        m_reorganised = false;
+
         if (m_pool.size() / 2 / m_max_thread_count == 0)
             return;
         m_reorganised = true;
