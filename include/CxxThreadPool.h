@@ -1,7 +1,7 @@
 /*
  * <Helper Class for C++ Threads and Pools.>
  * <Inspired by QThreadPool and QRunners.>
- * Copyright (C) 2020 Conrad Hübler <Conrad.Huebler@gmx.net>
+ * Copyright (C) 2020 - 2023 Conrad Hübler <Conrad.Huebler@gmx.net>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -78,8 +78,11 @@ public:
     inline int Time() const { return m_time; }
     virtual inline bool BreakThreadPool() const { return false; }
 
+    inline void setEnabled(bool enabled) { m_enabled = enabled; }
+    inline bool isEnabled() const { return m_enabled; }
+
 private:
-    bool m_running = true, m_finished = false;
+    bool m_running = true, m_finished = false, m_enabled = true;
     bool m_autodelete = true;
     int m_return = 0;
     std::chrono::time_point<std::chrono::system_clock> m_start, m_end;
@@ -95,7 +98,8 @@ public:
     int execute() override
     {
         for (int i = 0; i < m_threads.size(); ++i)
-            m_threads[i]->execute();
+            if (m_threads[i]->isEnabled())
+                m_threads[i]->execute();
         return 0;
     }
 
@@ -361,6 +365,11 @@ private:
         auto thread = m_pool.front();
         if (thread == NULL)
             return false;
+        if (!thread->isEnabled()) {
+            m_finished.push_back(thread);
+            m_pool.pop();
+            return m_pool.size();
+        }
         thread->setIncrementId(m_increment_id);
         m_increment_id++;
         std::thread* th = new std::thread(&CxxThread::start, thread);
