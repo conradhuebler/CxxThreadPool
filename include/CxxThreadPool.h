@@ -80,6 +80,8 @@ public:
 
     inline void setEnabled(bool enabled) { m_enabled = enabled; }
     inline bool isEnabled() const { return m_enabled; }
+    void setThreadId(int id) { m_thread_id = id; }
+    int ThreadId() const { return m_thread_id; }
 
 private:
     bool m_running = true, m_finished = false, m_enabled = true;
@@ -88,6 +90,9 @@ private:
     std::chrono::time_point<std::chrono::system_clock> m_start, m_end;
     int m_increment_id = 0;
     int m_time = 0;
+
+protected:
+    int m_thread_id = 0;
 };
 
 class CxxBlockedThread : public CxxThread {
