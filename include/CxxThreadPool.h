@@ -82,6 +82,7 @@ public:
     inline bool isEnabled() const { return m_enabled; }
     void setThreadId(int id) { m_thread_id = id; }
     int ThreadId() const { return m_thread_id; }
+    int Return() const { return m_return; }
 
 private:
     bool m_running = true, m_finished = false, m_enabled = true;
