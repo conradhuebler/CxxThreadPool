@@ -1,7 +1,7 @@
 /*
  * <Helper Class for C++ Threads and Pools.>
  * <Inspired by QThreadPool and QRunners.>
- * Copyright (C) 2020 - 2023 Conrad Hübler <Conrad.Huebler@gmx.net>
+ * Copyright (C) 2020 - 2024 Conrad Hübler <Conrad.Huebler@gmx.net>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -76,7 +76,7 @@ public:
     inline void setAutoDelete(bool autodelete) { m_autodelete = autodelete; }
     inline void setIncrementId(int id) { m_increment_id = id; }
     inline int Time() const { return m_time; }
-    virtual inline bool BreakThreadPool() const { return false; }
+    virtual inline bool BreakThreadPool() const { return m_break_pool; }
 
     inline void setEnabled(bool enabled) { m_enabled = enabled; }
     inline bool isEnabled() const { return m_enabled; }
@@ -94,6 +94,7 @@ private:
 
 protected:
     int m_thread_id = 0;
+    bool m_break_pool = false;
 };
 
 class CxxBlockedThread : public CxxThread {
@@ -104,8 +105,11 @@ public:
     int execute() override
     {
         for (int i = 0; i < m_threads.size(); ++i)
-            if (m_threads[i]->isEnabled())
+            if (m_threads[i]->isEnabled()) {
                 m_threads[i]->execute();
+                if (m_threads[i]->BreakThreadPool())
+                    return 0;
+            }
         return 0;
     }
 
