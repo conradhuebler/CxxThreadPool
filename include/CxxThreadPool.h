@@ -1,7 +1,7 @@
 /*
  * <Helper Class for C++ Threads and Pools.>
  * <Inspired by QThreadPool and QRunners.>
- * Copyright (C) 2020 - 2024 Conrad Hübler <Conrad.Huebler@gmx.net>
+ * Copyright (C) 2020 - 2025 Conrad Hübler <Conrad.Huebler@gmx.net>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -83,6 +83,7 @@ public:
     void setThreadId(int id) { m_thread_id = id; }
     int ThreadId() const { return m_thread_id; }
     int Return() const { return m_return; }
+    int getReturnValue() const { return m_return; }
 
 private:
     bool m_running = true, m_finished = false, m_enabled = true;
@@ -368,6 +369,9 @@ public:
     inline int WakeUp() const { return m_wake_up; }
     inline void setWakeUp(int wakeup) { m_wake_up = wakeup; }
     inline void setBarWidth(int width) { m_bar_width = width; }
+    std::vector<CxxThread*>& getFinishedThreads() { return m_finished; }
+    std::vector<CxxThread*>& getActiveThreads() { return m_active; }
+    std::queue<CxxThread*>& getThreadQueue() { return m_pool; }
 
 private:
     inline bool StartNext()
