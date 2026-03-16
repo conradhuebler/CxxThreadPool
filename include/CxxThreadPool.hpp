@@ -259,10 +259,13 @@ public:
     }
 
     /**
-     * @brief Destructor cleans up all threads
+     * @brief Destructor cleans up all threads and shuts down worker pool
      */
     virtual ~CxxThreadPool()
     {
+        // Shut down worker pool if active
+        shutdownWorkerPool();
+
         // Clean up queued threads
         while (!m_pool.empty()) {
             auto thread = m_pool.front();
@@ -336,15 +339,60 @@ public:
     /**
      * @brief Start execution of all threads and wait until completion
      */
+    /**
+     * @brief Enable persistent worker pool mode
+     * @details Workers stay alive between StartAndWait() calls, eliminating
+     *          thread creation/destruction overhead for repeated small tasks.
+     *          Default: disabled (legacy queue mode).
+     * @param enable Whether to enable worker pool mode
+     * @param n_workers Number of worker threads (0 = use m_max_thread_count)
+     *
+     * Claude Generated (March 2026): Persistent worker pool for sub-ms task dispatch
+     */
+    void setWorkerPoolMode(bool enable, int n_workers = 0)
+    {
+        if (enable && m_workers.empty()) {
+            m_worker_pool_mode = true;
+            int n = (n_workers > 0) ? n_workers : static_cast<int>(m_max_thread_count);
+            m_wp_shutdown.store(false);
+            for (int i = 0; i < n; ++i) {
+                m_workers.emplace_back(&CxxThreadPool::workerFunction, this);
+            }
+        } else if (!enable && !m_workers.empty()) {
+            shutdownWorkerPool();
+        }
+    }
+
     void StartAndWait()
     {
         m_start = std::chrono::steady_clock::now();
 
-        // Choose execution strategy
-        if (m_max_thread_count == 1) {
-            ParallelLoop();
+        if (m_worker_pool_mode && !m_workers.empty()) {
+            // Worker-pool path: enqueue tasks + wait for completion
+            {
+                std::lock_guard<std::mutex> lock(m_wp_mutex);
+                while (!m_pool.empty()) {
+                    m_wp_queue.push(m_pool.front());
+                    m_pool.pop();
+                    m_wp_pending.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+            m_wp_cv.notify_all();
+
+            // Wait for all tasks to complete
+            {
+                std::unique_lock<std::mutex> lock(m_wp_mutex);
+                m_wp_done_cv.wait(lock, [this] {
+                    return m_wp_pending.load(std::memory_order_relaxed) == 0;
+                });
+            }
         } else {
-            ParallelLoop();
+            // Legacy queue mode (unchanged)
+            if (m_max_thread_count == 1) {
+                ParallelLoop();
+            } else {
+                ParallelLoop();
+            }
         }
 
         // Reorganize blocked threads if needed
@@ -739,6 +787,53 @@ private:
         std::cerr << std::flush;
     }
 
+    /**
+     * @brief Worker function for persistent worker pool threads
+     * Claude Generated (March 2026): Each worker waits on condition variable,
+     * executes task, decrements pending counter, notifies completion.
+     */
+    void workerFunction()
+    {
+        while (true) {
+            CxxThread* task = nullptr;
+            {
+                std::unique_lock<std::mutex> lock(m_wp_mutex);
+                m_wp_cv.wait(lock, [this] {
+                    return !m_wp_queue.empty() || m_wp_shutdown.load(std::memory_order_relaxed);
+                });
+                if (m_wp_shutdown.load(std::memory_order_relaxed) && m_wp_queue.empty())
+                    return;
+                task = m_wp_queue.front();
+                m_wp_queue.pop();
+            }
+            task->start();
+            {
+                std::lock_guard<std::mutex> lock(m_wp_mutex);
+                m_finished.push_back(task);
+            }
+            m_wp_pending.fetch_sub(1, std::memory_order_release);
+            m_wp_done_cv.notify_one();
+        }
+    }
+
+    /**
+     * @brief Shut down worker pool threads
+     */
+    void shutdownWorkerPool()
+    {
+        if (m_workers.empty()) return;
+        {
+            std::lock_guard<std::mutex> lock(m_wp_mutex);
+            m_wp_shutdown.store(true, std::memory_order_relaxed);
+        }
+        m_wp_cv.notify_all();
+        for (auto& w : m_workers) {
+            if (w.joinable()) w.join();
+        }
+        m_workers.clear();
+        m_worker_pool_mode = false;
+    }
+
     // Configuration
     ProgressBarType m_progresstype = ProgressBarType::Continously;
     int m_max_thread_count = 1;
@@ -757,6 +852,16 @@ private:
     // State flags
     bool m_reorganised = false;
     bool m_evn_overwrite_bar = false;
+
+    // Worker pool mode (Claude Generated, March 2026)
+    bool m_worker_pool_mode = false;
+    std::vector<std::thread> m_workers;
+    std::queue<CxxThread*> m_wp_queue;
+    std::mutex m_wp_mutex;
+    std::condition_variable m_wp_cv;        // Workers wait here
+    std::condition_variable m_wp_done_cv;   // StartAndWait() waits here
+    std::atomic<int> m_wp_pending{0};
+    std::atomic<bool> m_wp_shutdown{false};
 
     // Timing
     std::chrono::time_point<std::chrono::steady_clock> m_start, m_end;
