@@ -2,11 +2,21 @@
  * @file CxxThreadPool.hpp
  * @brief Modern C++ Thread Pool and Thread Management Library
  * @details Provides helper classes for C++ thread management and thread pools,
- *          inspired by QThreadPool and QRunners
+ *          inspired by QThreadPool and QRunners.
+ *
+ *          Two execution modes:
+ *          1. **Worker Pool (default)**: Persistent worker threads created lazily on first use.
+ *             Tasks dispatched via condition variable — zero thread creation overhead per task.
+ *          2. **Legacy Mode (opt-in)**: New OS thread per task (old ParallelLoop behavior).
+ *             Activate via setLegacyMode(true).
+ *
+ *          Two task submission APIs:
+ *          A. **CxxThread API**: addThread() + StartAndWait() — for subclassed CxxThread objects
+ *          B. **Async API**: enqueue(callable) → std::future<R> — fire-and-forget with future
  *
  * @author Conrad Hübler <Conrad.Huebler@gmx.net>
- * @author AI assisted using Claude 3.7 Sonnet
- * @copyright 2020-2025 Conrad Hübler
+ * @author AI assisted using Claude 3.7 Sonnet, Claude Opus 4.6
+ * @copyright 2020-2026 Conrad Hübler
  * @license MIT License
  */
 
@@ -17,6 +27,7 @@
 #include <condition_variable>
 #include <cstdlib>
 #include <functional>
+#include <future>
 #include <iostream>
 #include <map>
 #include <memory>
@@ -24,6 +35,7 @@
 #include <queue>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 #if defined(_OPENMP)
@@ -204,6 +216,9 @@ private:
 
 /**
  * @brief Thread pool manager that handles execution of multiple threads
+ *
+ * Default mode: persistent worker pool (workers created lazily on first use).
+ * Legacy mode: new OS thread per task (opt-in via setLegacyMode(true)).
  */
 class CxxThreadPool {
 public:
@@ -254,7 +269,7 @@ public:
         omp_set_num_threads(1);
 #endif
 
-        // Set thread count to available processors or OMP setting
+        // Set thread count (workers created lazily on first use)
         setActiveThreadCount(m_omp_env_thread > 0 ? m_omp_env_thread : std::thread::hardware_concurrency());
     }
 
@@ -263,7 +278,6 @@ public:
      */
     virtual ~CxxThreadPool()
     {
-        // Shut down worker pool if active
         shutdownWorkerPool();
 
         // Clean up queued threads
@@ -307,13 +321,40 @@ public:
     }
 
     /**
-     * @brief Set number of active threads
+     * @brief Set number of active threads (workers created lazily on first use)
      * @param threadCount Maximum number of concurrent threads
      */
     void setActiveThreadCount(int threadCount)
     {
-        m_max_thread_count = std::max(1, threadCount);
+        int new_count = std::max(1, threadCount);
+        if (new_count != m_max_thread_count) {
+            m_max_thread_count = new_count;
+            m_workers_stale = true;
+        }
     }
+
+    /**
+     * @brief Switch to legacy mode (new OS thread per task, old ParallelLoop behavior)
+     * @param legacy True = legacy mode, false = worker pool mode (default)
+     *
+     * Use this when you need shouldBreakThreadPool() or progress bar updates during execution.
+     * Worker pool mode is faster but does not support mid-execution interruption.
+     */
+    void setLegacyMode(bool legacy)
+    {
+        if (legacy && !m_legacy_mode) {
+            shutdownWorkerPool();
+            m_legacy_mode = true;
+        } else if (!legacy && m_legacy_mode) {
+            m_legacy_mode = false;
+            m_workers_stale = true;  // Will be created on next use
+        }
+    }
+
+    /**
+     * @brief Check if pool is in legacy mode
+     */
+    bool isLegacyMode() const { return m_legacy_mode; }
 
     /**
      * @brief Add a thread to the pool
@@ -337,43 +378,92 @@ public:
     }
 
     /**
-     * @brief Start execution of all threads and wait until completion
-     */
-    /**
-     * @brief Enable persistent worker pool mode
-     * @details Workers stay alive between StartAndWait() calls, eliminating
-     *          thread creation/destruction overhead for repeated small tasks.
-     *          Default: disabled (legacy queue mode).
-     * @param enable Whether to enable worker pool mode
-     * @param n_workers Number of worker threads (0 = use m_max_thread_count)
+     * @brief Submit a callable to the worker pool, returns std::future
      *
-     * Claude Generated (March 2026): Persistent worker pool for sub-ms task dispatch
+     * Like std::async(std::launch::async, ...) but uses the persistent worker pool
+     * instead of creating a new OS thread. Works in both worker pool and legacy mode
+     * (legacy mode falls back to std::async).
+     *
+     * @param f Callable (lambda, function pointer, std::function, etc.)
+     * @param args Arguments forwarded to f
+     * @return std::future<R> where R = return type of f(args...)
+     *
+     * Example:
+     *   CxxThreadPool pool;
+     *   auto f1 = pool.enqueue([]() { return computeA(); });
+     *   auto f2 = pool.enqueue([&](int x) { return computeB(x); }, 42);
+     *   double a = f1.get();  // blocks until done
+     *   int b = f2.get();
+     *
+     * Claude Generated (March 2026)
      */
-    void setWorkerPoolMode(bool enable, int n_workers = 0)
+    template<typename F, typename... Args>
+    auto enqueue(F&& f, Args&&... args)
+        -> std::future<typename std::invoke_result<F, Args...>::type>
     {
-        if (enable && m_workers.empty()) {
-            m_worker_pool_mode = true;
-            int n = (n_workers > 0) ? n_workers : static_cast<int>(m_max_thread_count);
-            m_wp_shutdown.store(false);
-            for (int i = 0; i < n; ++i) {
-                m_workers.emplace_back(&CxxThreadPool::workerFunction, this);
-            }
-        } else if (!enable && !m_workers.empty()) {
-            shutdownWorkerPool();
+        using return_type = typename std::invoke_result<F, Args...>::type;
+
+        auto task = std::make_shared<std::packaged_task<return_type()>>(
+            std::bind(std::forward<F>(f), std::forward<Args>(args)...)
+        );
+        std::future<return_type> result = task->get_future();
+
+        if (m_legacy_mode) {
+            // Legacy fallback: std::async with deferred-or-async policy
+            // Store the future internally so we can wait on it
+            std::lock_guard<std::mutex> lock(m_wp_mutex);
+            m_async_futures.emplace_back(std::async(std::launch::async, [task]() { (*task)(); }));
+            return result;
         }
+
+        // Worker pool path
+        ensureWorkers();
+        {
+            std::lock_guard<std::mutex> lock(m_wp_mutex);
+            m_wp_func_queue.emplace([task]() { (*task)(); });
+            m_wp_pending.fetch_add(1, std::memory_order_relaxed);
+        }
+        m_wp_cv.notify_one();
+        return result;
     }
 
+    /**
+     * @brief Start execution of all queued CxxThread tasks and wait until completion
+     *
+     * In worker pool mode (default): dispatches tasks to persistent workers.
+     * In legacy mode: creates a new OS thread per task (old ParallelLoop behavior).
+     */
     void StartAndWait()
     {
         m_start = std::chrono::steady_clock::now();
 
-        if (m_worker_pool_mode && !m_workers.empty()) {
-            // Worker-pool path: enqueue tasks + wait for completion
+        if (m_legacy_mode) {
+            // Legacy mode: thread-per-task with polling
+            ParallelLoop();
+        } else {
+            // Worker pool mode: dispatch to persistent workers
+            ensureWorkers();
             {
                 std::lock_guard<std::mutex> lock(m_wp_mutex);
                 while (!m_pool.empty()) {
-                    m_wp_queue.push(m_pool.front());
+                    CxxThread* task = m_pool.front();
                     m_pool.pop();
+
+                    if (!task->isEnabled()) {
+                        m_finished.push_back(task);
+                        continue;
+                    }
+
+                    task->setIncrementId(m_increment_id++);
+
+                    // Wrap CxxThread::start() as std::function for unified dispatch
+                    m_wp_func_queue.emplace([this, task]() {
+                        task->start();
+                        {
+                            std::lock_guard<std::mutex> lock2(m_wp_mutex);
+                            m_finished.push_back(task);
+                        }
+                    });
                     m_wp_pending.fetch_add(1, std::memory_order_relaxed);
                 }
             }
@@ -383,15 +473,8 @@ public:
             {
                 std::unique_lock<std::mutex> lock(m_wp_mutex);
                 m_wp_done_cv.wait(lock, [this] {
-                    return m_wp_pending.load(std::memory_order_relaxed) == 0;
+                    return m_wp_pending.load(std::memory_order_acquire) == 0;
                 });
-            }
-        } else {
-            // Legacy queue mode (unchanged)
-            if (m_max_thread_count == 1) {
-                ParallelLoop();
-            } else {
-                ParallelLoop();
             }
         }
 
@@ -415,6 +498,30 @@ public:
                   << std::chrono::duration_cast<std::chrono::milliseconds>(m_end - m_start).count()
                   << " mseconds." << std::endl;
 #endif
+    }
+
+    /**
+     * @brief Wait for all enqueue()-submitted async tasks to complete
+     *
+     * Only needed when using the enqueue() API without StartAndWait().
+     * Does NOT wait for CxxThread tasks added via addThread().
+     */
+    void wait()
+    {
+        if (m_legacy_mode) {
+            // Legacy: wait on stored std::async futures
+            std::lock_guard<std::mutex> lock(m_wp_mutex);
+            for (auto& f : m_async_futures) {
+                if (f.valid()) f.wait();
+            }
+            m_async_futures.clear();
+        } else {
+            // Worker pool: wait for pending count to reach zero
+            std::unique_lock<std::mutex> lock(m_wp_mutex);
+            m_wp_done_cv.wait(lock, [this] {
+                return m_wp_pending.load(std::memory_order_acquire) == 0;
+            });
+        }
     }
 
     /**
@@ -571,7 +678,7 @@ public:
     int getWakeUpInterval() const { return m_wake_up; }
 
     /**
-     * @brief Set the wake-up interval
+     * @brief Set the wake-up interval (legacy mode only)
      * @param wakeup Wake-up interval in milliseconds
      */
     void setWakeUpInterval(int wakeup) { m_wake_up = wakeup; }
@@ -582,7 +689,94 @@ public:
      */
     void setProgressBarWidth(int width) { m_bar_width = width; }
 
+    /**
+     * @brief Get number of persistent worker threads (0 if not yet created or legacy mode)
+     */
+    int workerCount() const { return static_cast<int>(m_workers.size()); }
+
 private:
+    // =========================================================================
+    // Worker Pool Infrastructure (Claude Generated, March 2026)
+    // =========================================================================
+
+    /**
+     * @brief Create persistent worker threads if needed (lazy initialization)
+     *
+     * Called automatically before task dispatch. If thread count changed since
+     * last call, old workers are shut down and new ones created.
+     */
+    void ensureWorkers()
+    {
+        if (!m_workers_stale && !m_workers.empty())
+            return;
+
+        shutdownWorkerPool();
+        m_wp_shutdown.store(false, std::memory_order_relaxed);
+
+        for (int i = 0; i < m_max_thread_count; ++i) {
+            m_workers.emplace_back(&CxxThreadPool::workerFunction, this);
+        }
+        m_workers_stale = false;
+    }
+
+    /**
+     * @brief Worker thread function — waits for tasks, executes, signals completion
+     *
+     * Each worker loops: wait on condition variable → pop task → execute → decrement
+     * pending counter → notify completion. Exits when m_wp_shutdown is set and queue
+     * is empty.
+     */
+    void workerFunction()
+    {
+        while (true) {
+            std::function<void()> task;
+            {
+                std::unique_lock<std::mutex> lock(m_wp_mutex);
+                m_wp_cv.wait(lock, [this] {
+                    return !m_wp_func_queue.empty()
+                        || m_wp_shutdown.load(std::memory_order_relaxed);
+                });
+
+                if (m_wp_shutdown.load(std::memory_order_relaxed)
+                    && m_wp_func_queue.empty())
+                    return;
+
+                task = std::move(m_wp_func_queue.front());
+                m_wp_func_queue.pop();
+            }
+
+            task();
+
+            m_wp_pending.fetch_sub(1, std::memory_order_release);
+            m_wp_done_cv.notify_one();
+        }
+    }
+
+    /**
+     * @brief Shut down all persistent worker threads
+     */
+    void shutdownWorkerPool()
+    {
+        if (m_workers.empty())
+            return;
+
+        {
+            std::lock_guard<std::mutex> lock(m_wp_mutex);
+            m_wp_shutdown.store(true, std::memory_order_relaxed);
+        }
+        m_wp_cv.notify_all();
+
+        for (auto& w : m_workers) {
+            if (w.joinable())
+                w.join();
+        }
+        m_workers.clear();
+    }
+
+    // =========================================================================
+    // Legacy Mode: Thread-per-Task (original ParallelLoop)
+    // =========================================================================
+
     /**
      * @brief Start next thread from the queue
      * @return True if more threads are available
@@ -613,7 +807,7 @@ private:
     }
 
     /**
-     * @brief Execute and manage threads in parallel
+     * @brief Execute and manage threads in parallel (legacy mode)
      */
     void ParallelLoop()
     {
@@ -668,6 +862,10 @@ private:
             std::this_thread::sleep_for(std::chrono::milliseconds(m_wake_up));
         }
     }
+
+    // =========================================================================
+    // Progress Display
+    // =========================================================================
 
     /**
      * @brief Update and display status information
@@ -787,52 +985,9 @@ private:
         std::cerr << std::flush;
     }
 
-    /**
-     * @brief Worker function for persistent worker pool threads
-     * Claude Generated (March 2026): Each worker waits on condition variable,
-     * executes task, decrements pending counter, notifies completion.
-     */
-    void workerFunction()
-    {
-        while (true) {
-            CxxThread* task = nullptr;
-            {
-                std::unique_lock<std::mutex> lock(m_wp_mutex);
-                m_wp_cv.wait(lock, [this] {
-                    return !m_wp_queue.empty() || m_wp_shutdown.load(std::memory_order_relaxed);
-                });
-                if (m_wp_shutdown.load(std::memory_order_relaxed) && m_wp_queue.empty())
-                    return;
-                task = m_wp_queue.front();
-                m_wp_queue.pop();
-            }
-            task->start();
-            {
-                std::lock_guard<std::mutex> lock(m_wp_mutex);
-                m_finished.push_back(task);
-            }
-            m_wp_pending.fetch_sub(1, std::memory_order_release);
-            m_wp_done_cv.notify_one();
-        }
-    }
-
-    /**
-     * @brief Shut down worker pool threads
-     */
-    void shutdownWorkerPool()
-    {
-        if (m_workers.empty()) return;
-        {
-            std::lock_guard<std::mutex> lock(m_wp_mutex);
-            m_wp_shutdown.store(true, std::memory_order_relaxed);
-        }
-        m_wp_cv.notify_all();
-        for (auto& w : m_workers) {
-            if (w.joinable()) w.join();
-        }
-        m_workers.clear();
-        m_worker_pool_mode = false;
-    }
+    // =========================================================================
+    // Member Variables
+    // =========================================================================
 
     // Configuration
     ProgressBarType m_progresstype = ProgressBarType::Continously;
@@ -842,26 +997,30 @@ private:
     int m_wake_up = 100;
     int m_bar_width = 100;
 
-    // Thread tracking
+    // CxxThread task tracking
     double m_max = 0;
     std::queue<CxxThread*> m_pool;
     std::vector<CxxThread*> m_active, m_finished;
     std::map<int, CxxThread*> m_threads_map;
-    std::vector<std::pair<std::thread*, CxxThread*>> m_running_threads;
+    std::vector<std::pair<std::thread*, CxxThread*>> m_running_threads;  // Legacy mode only
 
     // State flags
     bool m_reorganised = false;
     bool m_evn_overwrite_bar = false;
+    bool m_legacy_mode = false;
 
-    // Worker pool mode (Claude Generated, March 2026)
-    bool m_worker_pool_mode = false;
-    std::vector<std::thread> m_workers;
-    std::queue<CxxThread*> m_wp_queue;
+    // Worker pool (Claude Generated, March 2026)
+    bool m_workers_stale = true;                       // True = workers need (re-)creation
+    std::vector<std::thread> m_workers;                // Persistent worker threads
+    std::queue<std::function<void()>> m_wp_func_queue; // Unified task queue (CxxThread + async)
     std::mutex m_wp_mutex;
-    std::condition_variable m_wp_cv;        // Workers wait here
-    std::condition_variable m_wp_done_cv;   // StartAndWait() waits here
-    std::atomic<int> m_wp_pending{0};
-    std::atomic<bool> m_wp_shutdown{false};
+    std::condition_variable m_wp_cv;                   // Workers wait here for tasks
+    std::condition_variable m_wp_done_cv;              // StartAndWait()/wait() waits here
+    std::atomic<int> m_wp_pending{0};                  // Number of tasks not yet completed
+    std::atomic<bool> m_wp_shutdown{false};             // Signal workers to exit
+
+    // Legacy async fallback (used when enqueue() called in legacy mode)
+    std::vector<std::future<void>> m_async_futures;
 
     // Timing
     std::chrono::time_point<std::chrono::steady_clock> m_start, m_end;
